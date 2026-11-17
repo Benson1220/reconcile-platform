@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reconcile-platform"
+version = "0.1.0"
+description = "Cross-system reconciliation learning project"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "psycopg[binary]>=3.2,<4", "python-dotenv>=1,<2", "python-multipart>=0.0.20,<1", "openai>=2,<3"]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.27,<1"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["web/*.html", "web/*.css", "web/*.js"]

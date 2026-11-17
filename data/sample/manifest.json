@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "as_of": "2026-11-17T09:00:00+08:00",
+  "timezone": "Asia/Taipei",
+  "currency": "TWD",
+  "order_sync_grace_minutes": 15,
+  "settlement_complete_through": "2026-11-16",
+  "expected_counts": {"orders": 8, "payments": 7, "settlements": 4},
+  "expected_cases": [
+    {"rule": "PAID_BUT_ORDER_UNPAID", "order_id": "O1001", "payment_id": "P9001"},
+    {"rule": "PAYMENT_AMOUNT_MISMATCH", "order_id": "O1002", "payment_id": "P9002"},
+    {"rule": "SETTLEMENT_MISSING", "order_id": "O1003", "payment_id": "P9003"},
+    {"rule": "SETTLEMENT_ARITHMETIC_MISMATCH", "order_id": "O1004", "payment_id": "P9004"}
+  ]
+}
