@@ -4,7 +4,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "dist/reconcile-platform-portfolio.zip"
-FILES = ["README.md", "pyproject.toml", "requirements-lock.txt", ".gitignore", ".env.example"]
+FILES = ["README.md", "pyproject.toml", "requirements-lock.txt", ".gitignore", ".env.example", ".python-version", "render.yaml"]
 DIRECTORIES = ["app", "sql", "scripts", "tests", "docs", "data/sample"]
 SKIP = {"__pycache__", ".venv", ".local", ".git", ".pytest_cache"}
 

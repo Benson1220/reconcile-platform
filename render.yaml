@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: reconcile-platform
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements-lock.txt && pip install --no-deps -e .
+    startCommand: python -m scripts.cloud_start
+    healthCheckPath: /ready
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DEMO_READ_ONLY
+        value: "true"
+      - key: OPENAI_SUMMARY_ENABLED
+        value: "false"
+      - key: PYTHONUNBUFFERED
+        value: "1"

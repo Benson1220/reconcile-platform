@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 import psycopg
@@ -7,13 +8,33 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import router
+from app.api import get_database_dsn, router
 
 logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
     instance = FastAPI(title="跨系統資料差異追查平台", version="0.2.0")
+    read_only = os.environ.get("DEMO_READ_ONLY", "false").lower() == "true"
+
+    @instance.middleware("http")
+    async def demo_access(request: Request, call_next):
+        if read_only and request.method not in {"GET", "HEAD", "OPTIONS"}:
+            return JSONResponse(status_code=403, content={"detail": "公開展示版僅供查詢；上傳與案件更新請使用本機版本。"})
+        return await call_next(request)
+
+    @instance.get("/api/deployment", tags=["健康檢查"])
+    def deployment():
+        return {"read_only": read_only}
+
+    @instance.get("/ready", tags=["健康檢查"])
+    def ready():
+        with psycopg.connect(get_database_dsn(), connect_timeout=5) as conn:
+            row = conn.execute("SELECT 1 FROM schema_migrations WHERE version=4").fetchone()
+        if row is None:
+            return JSONResponse(status_code=503, content={"detail": "資料庫尚未完成初始化"})
+        return {"status": "ready"}
+
     instance.include_router(router)
     web = Path(__file__).resolve().parent / "web"
     instance.mount("/static", StaticFiles(directory=web), name="static")

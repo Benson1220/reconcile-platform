@@ -1,6 +1,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+let readOnly = true;
 const state = {runId: null, runs: [], runTotal: 0, offset: 0, limit: 10, total: 0, runsToken: 0, runToken: 0, caseToken: 0, detailToken: 0};
 const rules = {
   PAID_BUT_ORDER_UNPAID: ["訂單狀態未更新", ""],
@@ -222,6 +223,7 @@ function workflow(data) {
   section.append(heading);
   const form = node("form");
   const fields = node("fieldset");
+  fields.disabled = readOnly;
   const statusLabel = node("label", "field-label", "更新處理狀態");
   statusLabel.htmlFor = "case-status";
   const select = node("select");
@@ -311,8 +313,8 @@ function workflow(data) {
 function ruleSummaryPanel(data) {
   const section = node("section", "ai-panel");
   const heading = node("div", "workflow-heading");
-  heading.append(node("h3", "", "規則式查核摘要"), node("span", "ai-tag", "本機整理"));
-  const notice = node("p", "input-help", "依固定規則整理本案件的異常、原始證據與查核步驟。全程在本機執行，無需 API 金鑰或額度。");
+  heading.append(node("h3", "", "規則式查核摘要"), node("span", "ai-tag", "規則整理"));
+  const notice = node("p", "input-help", "依固定規則整理本案件的異常、原始證據與查核步驟，不呼叫外部模型，無需 API 金鑰或額度。");
   const button = node("button", "button secondary", "產生規則式摘要");
   button.type = "button";
   button.disabled = true;
@@ -374,8 +376,9 @@ function ruleSummaryPanel(data) {
       const saved = await api(`/api/cases/${data.case_id}/rule-summary`);
       if (!alive()) return;
       configured = true;
-      button.disabled = false;
-      feedback.textContent = "可直接產生摘要。建議步驟來自固定查核清單，實際原因仍需人工確認。";
+      button.disabled = readOnly;
+      button.hidden = readOnly;
+      feedback.textContent = readOnly ? "展示版提供預先整理的摘要。可點選引用查看原始證據。" : "可直接產生摘要。建議步驟來自固定查核清單，實際原因仍需人工確認。";
       showSummary(saved);
     } catch (error) {if (alive()) feedback.textContent = error.message;}
   }
@@ -458,6 +461,7 @@ async function openCase(caseId, orderId) {
 }
 $("upload-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (readOnly) return;
   message("upload-message");
   const form = event.currentTarget;
   const payload = new FormData(form);
@@ -496,4 +500,21 @@ $("case-dialog").addEventListener("click", (event) => {
   const rect = event.currentTarget.getBoundingClientRect();
   if (event.target === event.currentTarget && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) event.currentTarget.close();
 });
-loadRuns();
+async function startWorkbench() {
+  $("upload-fields").disabled = true;
+  try {
+    const config = await api("/api/deployment");
+    readOnly = config.read_only !== false;
+    $("upload-fields").disabled = readOnly;
+    if (readOnly) {
+      $("demo-notice").hidden = false;
+      document.querySelector(".upload-panel").hidden = true;
+      $("workbench-layout").classList.add("demo-layout");
+    }
+    await loadRuns();
+  } catch (error) {
+    message("query-message", error.message);
+    connection(false);
+  }
+}
+startWorkbench();

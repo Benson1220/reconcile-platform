@@ -4,6 +4,8 @@
 
 **面試展示入口：** [五分鐘展示與問答](docs/interview-guide.md) · [架構與設計取捨](docs/architecture.md)
 
+**公開網站部署：** [Render + Neon 逐步操作](docs/deployment-step-by-step.md)。已提供雲端啟動與唯讀展示設定；需設定託管帳號與資料庫後取得實際網址。
+
 ## 解決的問題
 
 客戶已付款，訂單卻顯示未付款；IT 需要跨三份資料核對編號、金額與時間，再整理調查依據。
@@ -117,7 +119,7 @@ setup 自動產生隨機密碼與 .env；不必先複製 .env.example。
 RUN_DATABASE_TESTS=1 python -m unittest discover -s tests -v
 ```
 
-目前預期 `Ran 115 tests`、`OK`。其中 29 項為 PostgreSQL 整合測試，使用獨立暫存 schema。
+目前預期 `Ran 123 tests`、`OK`。其中 31 項為 PostgreSQL 整合測試，使用獨立暫存 schema。
 2026-11-17 已完整執行通過。測試中的外部 AI 回應使用 mock，不消耗模型額度。
 
 不連資料庫時可執行：
@@ -126,7 +128,7 @@ RUN_DATABASE_TESTS=1 python -m unittest discover -s tests -v
 python -m unittest discover -s tests -v
 ```
 
-預期 86 項通過、29 項略過。這些是功能驗證，尚無大規模效能或正式環境服務水準數據。
+預期 92 項通過、31 項略過。這些是功能驗證，尚無大規模效能或正式環境服務水準數據。
 
 ## 重要設計與範圍
 

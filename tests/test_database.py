@@ -92,6 +92,38 @@ class DatabaseTests(unittest.TestCase):
         with psycopg.connect(self.dsn) as conn:
             self.assertEqual(conn.execute("SELECT count(*) FROM schema_migrations").fetchone()[0], 4)
 
+    def test_cloud_bootstrap_reuses_samples_and_prepares_read_only_summaries(self):
+        from scripts.cloud_start import bootstrap
+        from app.main import create_app
+        from app.api import get_database_dsn
+        from fastapi.testclient import TestClient
+        from unittest.mock import patch
+
+        first = bootstrap(self.dsn)
+        second = bootstrap(self.dsn)
+        self.assertEqual(first["run_id"], second["run_id"])
+        self.assertTrue(second["reused"])
+        with psycopg.connect(self.dsn) as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM cases").fetchone()[0], 4)
+            self.assertEqual(conn.execute("SELECT count(*) FROM case_rule_summaries").fetchone()[0], 4)
+            case_ids = [row[0] for row in conn.execute("SELECT id FROM cases ORDER BY id")]
+        with patch.dict(os.environ, {"DEMO_READ_ONLY": "true"}):
+            app = create_app()
+            app.dependency_overrides[get_database_dsn] = lambda: self.dsn
+            with TestClient(app) as client:
+                self.assertEqual(client.get(f"/api/runs/{first['run_id']}/cases").json()["total"], 4)
+                for case_id in case_ids:
+                    self.assertIsNotNone(client.get(f"/api/cases/{case_id}/rule-summary").json()["summary"])
+                    self.assertEqual(client.post(f"/api/cases/{case_id}/rule-summary").status_code, 403)
+
+    def test_cloud_bootstrap_refuses_database_with_other_source_data(self):
+        from scripts.cloud_start import bootstrap
+        snapshot = prepare_sample()
+        snapshot.files["orders"] += b"\n"
+        save_snapshot(snapshot, self.dsn)
+        with self.assertRaises(ValueError):
+            bootstrap(self.dsn)
+
 
 if __name__ == "__main__":
     unittest.main()
