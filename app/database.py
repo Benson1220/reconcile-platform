@@ -135,6 +135,13 @@ def get_run(dsn: str, run_id: int) -> dict | None:
         ).fetchone()
 
 
+def source_hashes(dsn: str, batch_id: int) -> dict[str, str]:
+    with psycopg.connect(dsn, connect_timeout=5) as conn:
+        return dict(conn.execute(
+            "SELECT filename, sha256 FROM source_files WHERE batch_id=%s", (batch_id,),
+        ).fetchall())
+
+
 def list_cases(dsn: str, run_id: int, rule: str | None, limit: int, offset: int, status: str | None = None) -> dict | None:
     with psycopg.connect(dsn, connect_timeout=5, row_factory=dict_row) as conn:
         if not conn.execute("SELECT 1 FROM reconciliation_runs WHERE id=%s", (run_id,)).fetchone():

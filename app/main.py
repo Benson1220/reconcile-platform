@@ -3,12 +3,16 @@ import os
 from pathlib import Path
 
 import psycopg
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import get_database_dsn, router
+from app.database import get_case, get_run, source_hashes
+from app.report import render_report
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,17 @@ def create_app() -> FastAPI:
     @instance.get("/", include_in_schema=False)
     def home():
         return FileResponse(web / "index.html", headers={"Cache-Control": "no-cache"})
+
+    @instance.get("/cases/{case_id}/report", response_class=HTMLResponse, include_in_schema=False)
+    def case_report(case_id: Annotated[int, PathParam(ge=1)], dsn: str = Depends(get_database_dsn)):
+        case = get_case(dsn, case_id)
+        if case is None:
+            raise HTTPException(404, "找不到此異常案件")
+        run = get_run(dsn, case["run_id"])
+        if run is None:
+            raise HTTPException(404, "找不到此案件的比對批次")
+        hashes = source_hashes(dsn, run["batch_id"])
+        return HTMLResponse(render_report(case, run, hashes), headers={"Cache-Control": "no-store"})
 
     @instance.exception_handler(psycopg.Error)
     async def database_error(request: Request, exc: psycopg.Error):

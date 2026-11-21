@@ -419,7 +419,11 @@ function renderDetail(data) {
     grid.append(entry);
   }
   const rootCause = node("p", "root-cause", data.root_cause || "實際原因待調查。");
-  container.replaceChildren(badge, summary, workflow(data), ruleSummaryPanel(data), grid);
+  const report = node("a", "button secondary", "列印／另存 PDF ↗");
+  report.href = `/cases/${data.case_id}/report`;
+  report.target = "_blank";
+  report.rel = "noopener";
+  container.replaceChildren(badge, summary, report, workflow(data), ruleSummaryPanel(data), grid);
   if (data.difference_definition) container.append(node("p", "muted small", data.difference_definition));
   container.append(rootCause, node("h3", "detail-section-title", "原始證據"));
   for (const [index, evidence] of (data.evidence || []).entries()) {

@@ -34,6 +34,27 @@ class ApiDatabaseTests(unittest.TestCase):
         with psycopg.connect(self.base_dsn) as conn:
             conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(self.schema)))
 
+    def test_printable_report_uses_evidence_and_escapes_case_notes(self):
+        uploaded = self.client.post("/api/reconciliations", files=self.files).json()
+        cases = self.client.get(uploaded["cases_url"]).json()["items"]
+        case_id = next(case["case_id"] for case in cases if case["order_id"] == "O1004")
+        path = f"/api/cases/{case_id}"
+        note = "<script>alert(1)</script>"
+        self.assertEqual(self.client.patch(path, json={
+            "status": "CLOSED", "note": note, "expected_version": 1,
+        }).status_code, 200)
+        report = self.client.get(f"/cases/{case_id}/report")
+        self.assertEqual(report.status_code, 200)
+        for value in ("O1004", "S8004", "1960.00", "1970.00", "10.00", "已結案",
+                      "E1 · settlements.csv · 第 4 列", "E2 · payments.csv · 第 5 列",
+                      "SHA-256", "建議查核步驟", "&lt;script&gt;alert(1)&lt;/script&gt;"):
+            self.assertIn(value, report.text)
+        self.assertNotIn(note, report.text)
+        self.assertEqual(report.headers["cache-control"], "no-store")
+        for case in cases:
+            self.assertEqual(self.client.get(f"/cases/{case['case_id']}/report").status_code, 200)
+        self.assertEqual(self.client.get("/cases/999999/report").status_code, 404)
+
     def test_upload_query_filter_and_detail_round_trip(self):
         response = self.client.post("/api/reconciliations", files=self.files)
         self.assertEqual(response.status_code, 201, response.text)
