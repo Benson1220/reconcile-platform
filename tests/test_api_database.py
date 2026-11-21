@@ -8,9 +8,10 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from app.api import get_database_dsn
-from app.database import database_url, initialize_database, read_summary
+from app.database import database_url, initialize_database, read_summary, save_snapshot
 from app.main import create_app
 from app.pipeline import SAMPLE_DIR
+from scripts.tracking_demo import demo_snapshot
 
 
 @unittest.skipUnless(os.environ.get("RUN_DATABASE_TESTS") == "1", "需啟用 PostgreSQL 整合測試")
@@ -33,6 +34,43 @@ class ApiDatabaseTests(unittest.TestCase):
     def cleanup_schema(self):
         with psycopg.connect(self.base_dsn) as conn:
             conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(self.schema)))
+
+    def test_missing_settlement_tracks_shared_workflow_and_requires_human_review(self):
+        def missing_case(stage):
+            run_id = save_snapshot(demo_snapshot(stage), self.dsn)["run_id"]
+            rows = self.client.get(f"/api/runs/{run_id}/cases").json()["items"]
+            return run_id, next((row for row in rows if row["payment_id"] == "P9003"), None)
+
+        _, first = missing_case("first")
+        first_url = f"/api/cases/{first['case_id']}"
+        self.assertEqual(self.client.patch(first_url, json={
+            "status": "IN_PROGRESS", "note": "等候結算資料", "expected_version": 1,
+        }).status_code, 200)
+        _, repeat = missing_case("repeat")
+        self.assertNotEqual(first["case_id"], repeat["case_id"])
+        self.assertEqual(repeat["status"], "IN_PROGRESS")
+        repeat_url = f"/api/cases/{repeat['case_id']}"
+        self.assertEqual(self.client.get(repeat_url).json()["history"][0]["note"], "等候結算資料")
+        self.assertEqual(self.client.patch(repeat_url, json={
+            "status": "IN_PROGRESS", "note": "第二批仍缺漏", "expected_version": 2,
+        }).status_code, 200)
+        self.assertEqual(self.client.get(first_url).json()["history"][0]["note"], "第二批仍缺漏")
+
+        settled_run, missing = missing_case("settled")
+        self.assertIsNone(missing)
+        detail = self.client.get(first_url).json()
+        follow_up = detail["tracking"]
+        self.assertEqual(follow_up["status"], "PENDING_REVIEW")
+        self.assertEqual(detail["status"], "IN_PROGRESS")
+        self.assertEqual(detail["evidence"][1]["type"], "absence_check")
+        self.assertEqual(len(follow_up["observations"]), 3)
+        latest = follow_up["observations"][-1]
+        self.assertEqual(latest["run_id"], settled_run)
+        self.assertEqual(latest["settlements"][0]["record"]["settlement_id"], "S8003")
+        response = self.client.patch(first_url, json={
+            "status": "CLOSED", "note": "已核對 S8003", "expected_version": 3,
+        })
+        self.assertEqual(response.json()["tracking"]["status"], "REVIEWED")
 
     def test_printable_report_uses_evidence_and_escapes_case_notes(self):
         uploaded = self.client.post("/api/reconciliations", files=self.files).json()

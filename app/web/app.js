@@ -192,7 +192,8 @@ async function loadRuns(preferred = null, append = false) {
       message("query-message");
       return;
     }
-    const selected = state.runs.find((run) => run.run_id === target) || state.runs[0];
+    const initial = readOnly ? state.runs.at(-1) : state.runs[0];
+    const selected = state.runs.find((run) => run.run_id === target) || initial;
     select.value = String(selected.run_id);
     if (!append || selected.run_id !== state.runId) await selectRun(selected.run_id);
   } catch (error) {
@@ -216,7 +217,7 @@ function pair(label, value) {
   return entry;
 }
 
-function workflow(data) {
+function workflow(data, findingId = data.case_id) {
   const section = node("section", "workflow");
   const heading = node("div", "workflow-heading");
   heading.append(node("h3", "", "案件處理"), node("span", `case-status ${data.status.toLowerCase()}`, statuses[data.status]));
@@ -280,8 +281,8 @@ function workflow(data) {
     feedback.hidden = true;
     reload.hidden = true;
     try {
-      const updated = await api(`/api/cases/${data.case_id}`, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
-      if (state.runId === data.run_id) await loadCases();
+      const updated = await api(`/api/cases/${findingId}`, {method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (state.runId) await loadCases();
       if (token !== state.detailToken || !$("case-dialog").open) return;
       renderDetail(updated);
       message("workflow-message", "處理紀錄已儲存，狀態與備註已更新。", true);
@@ -298,7 +299,7 @@ function workflow(data) {
     const token = state.detailToken;
     reload.disabled = true;
     try {
-      const updated = await api(`/api/cases/${data.case_id}`);
+      const updated = await api(`/api/cases/${findingId}`);
       if (token !== state.detailToken || !$("case-dialog").open) return;
       renderDetail(updated);
       $("case-note").value = draft;
@@ -401,6 +402,40 @@ function ruleSummaryPanel(data) {
   load();
   return section;
 }
+function trackingPanel(data) {
+  const section = node("section", "workflow");
+  const tracking = data.tracking;
+  const status = {
+    MISSING: "最新觀察仍缺少結算",
+    PENDING_REVIEW: "已找到結算 · 待人工確認",
+    REVIEWED: "已找到結算 · 已人工結案",
+  };
+  section.append(node("h3", "", "跨批次追蹤"), node("p", "message", status[tracking.status]));
+  section.append(node("p", "input-help", `付款 ${data.payment_id} 的調查狀態與備註會沿用案件 #${tracking.workflow.case_id}。`));
+  const list = node("ol", "tracking-observations");
+  let missingCount = 0;
+  for (const entry of tracking.observations) {
+    const item = node("li");
+    const label = entry.missing_case_id ? (++missingCount === 1 ? "首次發現缺漏" : "再次發現缺漏") : "找到結算紀錄";
+    item.append(node("p", "", `批次 #${entry.run_id} · ${displayTime(entry.as_of)} · ${label}`));
+    if (entry.missing_case_id && entry.missing_case_id !== data.case_id) {
+      const link = node("button", "row-button", "查看該批次證據");
+      link.type = "button";
+      link.addEventListener("click", () => openCase(entry.missing_case_id, data.order_id));
+      item.append(link);
+    }
+    for (const evidence of entry.settlements) {
+      const details = node("details", "raw-data");
+      details.append(node("summary", "", `${evidence.record.settlement_id} · ${evidence.file} 第 ${evidence.line} 列`));
+      details.append(node("pre", "", JSON.stringify(evidence.record, null, 2)));
+      item.append(details);
+    }
+    list.append(item);
+  }
+  section.append(list);
+  return section;
+}
+
 function renderDetail(data) {
   const container = $("case-detail");
   const [label, color] = rules[data.rule] || [data.rule, ""];
@@ -423,7 +458,9 @@ function renderDetail(data) {
   report.href = `/cases/${data.case_id}/report`;
   report.target = "_blank";
   report.rel = "noopener";
-  container.replaceChildren(badge, summary, report, workflow(data), ruleSummaryPanel(data), grid);
+  container.replaceChildren(badge, summary, report);
+  if (data.tracking) container.append(trackingPanel(data));
+  container.append(workflow(data.tracking?.workflow || data, data.case_id), ruleSummaryPanel(data), grid);
   if (data.difference_definition) container.append(node("p", "muted small", data.difference_definition));
   container.append(rootCause, node("h3", "detail-section-title", "原始證據"));
   for (const [index, evidence] of (data.evidence || []).entries()) {
@@ -452,7 +489,7 @@ async function openCase(caseId, orderId) {
   const token = ++state.detailToken;
   $("detail-title").textContent = `${orderId} · 案件 #${caseId}`;
   $("case-detail").replaceChildren(node("p", "detail-loading", "正在讀取案件證據…"));
-  $("case-dialog").showModal();
+  if (!$("case-dialog").open) $("case-dialog").showModal();
   $("case-dialog").scrollTop = 0;
   try {
     const data = await api(`/api/cases/${caseId}`);

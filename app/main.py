@@ -13,6 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from app.api import get_database_dsn, router
 from app.database import get_case, get_run, source_hashes
 from app.report import render_report
+from app.reconciliation import MISSING_SETTLEMENT_RULE
+from app.tracking import get_tracking
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,9 @@ def create_app() -> FastAPI:
         if run is None:
             raise HTTPException(404, "找不到此案件的比對批次")
         hashes = source_hashes(dsn, run["batch_id"])
+        if case["rule"] == MISSING_SETTLEMENT_RULE:
+            workflow = get_tracking(dsn, case)["workflow"]
+            case.update({key: value for key, value in workflow.items() if key != "case_id"})
         return HTMLResponse(render_report(case, run, hashes), headers={"Cache-Control": "no-store"})
 
     @instance.exception_handler(psycopg.Error)

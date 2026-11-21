@@ -99,19 +99,31 @@ class DatabaseTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         from unittest.mock import patch
 
+        original = save_snapshot(prepare_sample(), self.dsn)
         first = bootstrap(self.dsn)
         second = bootstrap(self.dsn)
+        self.assertEqual(original["run_id"], first["run_id"])
         self.assertEqual(first["run_id"], second["run_id"])
         self.assertTrue(second["reused"])
         with psycopg.connect(self.dsn) as conn:
-            self.assertEqual(conn.execute("SELECT count(*) FROM cases").fetchone()[0], 4)
-            self.assertEqual(conn.execute("SELECT count(*) FROM case_rule_summaries").fetchone()[0], 4)
+            self.assertEqual(conn.execute("SELECT count(*) FROM cases").fetchone()[0], 11)
+            self.assertEqual(conn.execute("SELECT count(*) FROM case_rule_summaries").fetchone()[0], 11)
+            self.assertEqual(conn.execute("SELECT count(*) FROM case_events").fetchone()[0], 1)
             case_ids = [row[0] for row in conn.execute("SELECT id FROM cases ORDER BY id")]
         with patch.dict(os.environ, {"DEMO_READ_ONLY": "true"}):
             app = create_app()
             app.dependency_overrides[get_database_dsn] = lambda: self.dsn
             with TestClient(app) as client:
-                self.assertEqual(client.get(f"/api/runs/{first['run_id']}/cases").json()["total"], 4)
+                runs = client.get("/api/runs").json()["items"][::-1]
+                self.assertEqual([run["case_count"] for run in runs], [4, 4, 3])
+                for run in runs[:2]:
+                    cases = client.get(f"/api/runs/{run['run_id']}/cases").json()["items"]
+                    missing = next(item for item in cases if item["payment_id"] == "P9003")
+                    self.assertEqual(missing["status"], "IN_PROGRESS")
+                    detail = client.get(f"/api/cases/{missing['case_id']}").json()
+                    self.assertEqual(len(detail["history"]), 1)
+                    self.assertEqual(detail["tracking"]["status"], "PENDING_REVIEW")
+                    self.assertEqual(detail["tracking"]["observations"][-1]["settlements"][0]["record"]["settlement_id"], "S8003")
                 for case_id in case_ids:
                     self.assertIsNotNone(client.get(f"/api/cases/{case_id}/rule-summary").json()["summary"])
                     self.assertEqual(client.post(f"/api/cases/{case_id}/rule-summary").status_code, 403)

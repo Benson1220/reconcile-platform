@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.database import CaseVersionConflict, database_url, get_case, get_run, list_cases, list_runs, save_snapshot, update_case
 from app.pipeline import prepare_snapshot
 from app.reconciliation import AMOUNT_RULE, MISSING_SETTLEMENT_RULE, RULE, SETTLEMENT_ARITHMETIC_RULE
-from app import ai_summary, rule_summary
+from app import ai_summary, rule_summary, tracking
 
 router = APIRouter(prefix="/api")
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -190,6 +190,10 @@ def query_case(case_id: Annotated[int, Path(ge=1)], dsn: str = Depends(get_datab
     result = get_case(dsn, case_id)
     if result is None:
         raise HTTPException(404, "找不到此異常案件")
+    if result["rule"] == MISSING_SETTLEMENT_RULE:
+        follow_up = tracking.get_tracking(dsn, result)
+        result.update({key: value for key, value in follow_up["workflow"].items() if key != "case_id"})
+        result["tracking"] = follow_up
     return result
 
 
@@ -204,6 +208,8 @@ def patch_case(
         raise HTTPException(409, str(exc)) from exc
     if result is None:
         raise HTTPException(404, "找不到此異常案件")
+    if result["rule"] == MISSING_SETTLEMENT_RULE:
+        return query_case(case_id, dsn)
     return result
 
 

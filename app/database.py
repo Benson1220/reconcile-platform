@@ -9,7 +9,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.pipeline import RULES_VERSION, SCHEMAS, Snapshot, digest, json_digest
-from app.reconciliation import parse_money
+from app.reconciliation import MISSING_SETTLEMENT_RULE, parse_money
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +43,9 @@ def initialize_database(dsn: str | None = None) -> list[int]:
 
 def save_snapshot(snapshot: Snapshot, dsn: str | None = None) -> dict:
     with psycopg.connect(dsn or database_url(), connect_timeout=5) as conn:
+        if any(case["rule"] == MISSING_SETTLEMENT_RULE for case in snapshot.report["cases"]):
+            # Establish original case IDs in commit order for concurrent missing-settlement imports.
+            conn.execute("SELECT pg_advisory_xact_lock(7160317)")
         inserted = conn.execute(
             "INSERT INTO import_batches (fingerprint) VALUES (%s) ON CONFLICT DO NOTHING RETURNING id",
             (snapshot.fingerprint,),
@@ -147,20 +150,27 @@ def list_cases(dsn: str, run_id: int, rule: str | None, limit: int, offset: int,
         if not conn.execute("SELECT 1 FROM reconciliation_runs WHERE id=%s", (run_id,)).fetchone():
             return None
         # 所有使用者輸入都透過參數傳入，不拼接 SQL。
-        condition = "run_id=%s"
+        condition = "c.run_id=%s"
         params = [run_id]
         if rule is not None:
-            condition += " AND rule=%s"
+            condition += " AND c.rule=%s"
             params.append(rule)
         if status is not None:
-            condition += " AND status=%s"
+            condition += " AND w.status=%s"
             params.append(status)
-        total = conn.execute(f"SELECT count(*) AS total FROM cases WHERE {condition}", params).fetchone()["total"]
+        # The finding belongs to its batch. The status belongs to the original investigation.
+        source = """FROM cases c JOIN cases w ON w.id=CASE WHEN c.rule=%s THEN (
+            SELECT min(original.id) FROM cases original
+            WHERE original.rule=c.rule AND original.order_id=c.order_id AND original.payment_id=c.payment_id
+        ) ELSE c.id END"""
+        query_params = [MISSING_SETTLEMENT_RULE, *params]
+        total = conn.execute(f"SELECT count(*) AS total {source} WHERE {condition}", query_params).fetchone()["total"]
         items = conn.execute(
-            f"""SELECT id AS case_id, run_id, rule, order_id, payment_id, status, version, updated_at, closed_at,
-                       payload->>'summary' AS summary, payload->>'difference' AS difference
-                FROM cases WHERE {condition} ORDER BY id LIMIT %s OFFSET %s""",
-            [*params, limit, offset],
+            f"""SELECT c.id AS case_id, c.run_id, c.rule, c.order_id, c.payment_id,
+                       w.status, w.version, w.updated_at, w.closed_at,
+                       c.payload->>'summary' AS summary, c.payload->>'difference' AS difference
+                {source} WHERE {condition} ORDER BY c.id LIMIT %s OFFSET %s""",
+            [*query_params, limit, offset],
         ).fetchall()
         return {"run_id": run_id, "total": total, "limit": limit, "offset": offset, "items": items}
 
@@ -186,6 +196,17 @@ def _case_detail(conn, case_id: int) -> dict | None:
     return {**payload, **row, "history": history}
 
 
+def investigation_case_id(conn, case_id: int) -> int | None:
+    row = conn.execute(
+        """SELECT CASE WHEN c.rule=%s THEN (
+               SELECT min(original.id) FROM cases original
+               WHERE original.rule=c.rule AND original.order_id=c.order_id AND original.payment_id=c.payment_id
+           ) ELSE c.id END AS id
+           FROM cases c WHERE c.id=%s""", (MISSING_SETTLEMENT_RULE, case_id),
+    ).fetchone()
+    return row["id"] if row else None
+
+
 class CaseVersionConflict(Exception):
     """使用者看到的是舊版案件，避免覆蓋其他人的進度。"""
 
@@ -195,6 +216,9 @@ def update_case(dsn: str, case_id: int, status: str, note: str, expected_version
     if status not in {"OPEN", "IN_PROGRESS", "CLOSED"} or not 1 <= len(note) <= 2000:
         raise ValueError("請選擇有效狀態，並填寫 1～2000 字的處理備註")
     with psycopg.connect(dsn, connect_timeout=5, row_factory=dict_row) as conn:
+        case_id = investigation_case_id(conn, case_id)
+        if case_id is None:
+            return None
         current = conn.execute("SELECT status, version, closed_at FROM cases WHERE id=%s FOR UPDATE", (case_id,)).fetchone()
         if current is None:
             return None
