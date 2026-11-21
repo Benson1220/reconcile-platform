@@ -34,6 +34,7 @@
 - 本機規則式摘要：整理事實、證據引用、固定查核步驟與尚缺資料。
 - 單一案件查核報告：從案件詳情開啟「列印／另存 PDF」，可查看摘要、原始證據、檔案雜湊與處理歷程。
 - 結算缺漏的跨批次追蹤：同一訂單與付款共用調查進度，補齊時顯示「待人工確認」。本機可依序執行 `python -m scripts.tracking_demo first`、`repeat`、`settled` 三個階段，從 O1003（P9003）的案件詳情查看時間線。
+- 本機帳號模式：在登入頁輸入帳密，使用工作台的「登出」按鈕切換帳號。檢視者可查詢與列印，調查人員可更新未結案案件，主管可結案與重開。操作紀錄保留登入帳號與當時角色。
 
 **目前摘要不呼叫外部模型，不需 API 金鑰或額度。**
 歷史 AI 串接與模擬測試保留，外部 AI 產生預設停用；尚未成功驗證真實模型摘要。
@@ -120,6 +121,22 @@ setup 自動產生隨機密碼與 .env；不必先複製 .env.example。
 
 其他作業系統需自行建立 PostgreSQL 並設定 DATABASE_URL；內附管理腳本主要針對 Mac，尚未驗證跨平台安裝。
 
+要在本機展示角色權限，先執行 `python -m scripts.db init`。再分別建立三個帳號：
+
+```bash
+python -m scripts.users demo_viewer viewer
+python -m scripts.users demo_investigator investigator
+python -m scripts.users demo_supervisor supervisor
+```
+
+每個帳號的密碼由終端機提示輸入。用下列指令啟動權限版，開啟 http://127.0.0.1:8003/ 登入，並可從工作台登出及切換帳號。
+
+```bash
+AUTH_REQUIRED=true python -m uvicorn app.main:app --host 127.0.0.1 --port 8003
+```
+
+公開展示使用 `DEMO_READ_ONLY=true`，訪客可免登入查看合成資料與列印報告。公開展示拒絕寫入，也不載入本機帳號。
+
 ## 驗證
 
 資料庫啟動後，執行完整測試：
@@ -128,7 +145,7 @@ setup 自動產生隨機密碼與 .env；不必先複製 .env.example。
 RUN_DATABASE_TESTS=1 python -m unittest discover -s tests -v
 ```
 
-目前預期 `Ran 125 tests`、`OK`。其中 33 項為 PostgreSQL 整合測試，使用獨立暫存 schema。
+目前預期 `Ran 127 tests`、`OK`。其中 35 項為 PostgreSQL 整合測試，使用獨立暫存 schema。
 2026-11-21 已在本機完整執行通過。測試中的外部 AI 回應使用 mock，不消耗模型額度。
 
 不連資料庫時可執行：
@@ -137,7 +154,7 @@ RUN_DATABASE_TESTS=1 python -m unittest discover -s tests -v
 python -m unittest discover -s tests -v
 ```
 
-預期 92 項通過、33 項略過。這些是功能驗證，尚無大規模效能或正式環境服務水準數據。
+預期 92 項通過、35 項略過。這些是功能驗證，尚無大規模效能或正式環境服務水準數據。
 
 ## 重要設計與範圍
 
@@ -148,13 +165,13 @@ python -m unittest discover -s tests -v
 - 比對結果與人工處理狀態分開；結案後仍保留歷史異常與證據。
 - 摘要依已知規則產生，不代替人工查核或直接修改來源資料。
 
-目前支援單一 TWD、每張訂單最多一筆成功付款。跨批次追蹤目前適用於結算缺漏。尚未支援退款、分期、登入權限或背景大量處理。
+目前支援單一 TWD、每張訂單最多一筆成功付款。跨批次追蹤目前適用於結算缺漏。尚未支援退款、分期或背景大量處理。
 
 ## 專案結構
 
 ```text
 app/                 API、比對、資料保存、摘要與網頁
-sql/                 001～004 資料庫 migration
+sql/                 001～006 資料庫 migration
 scripts/             本機資料庫管理、CLI 與作品包匯出
 tests/              規則、API 與 PostgreSQL 測試
 data/sample/         合成 CSV 與預期結果

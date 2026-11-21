@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path as FilePath
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -200,10 +200,16 @@ def query_case(case_id: Annotated[int, Path(ge=1)], dsn: str = Depends(get_datab
 @router.patch("/cases/{case_id}", tags=["4. 處理案件"], summary="更新狀態並新增處理備註")
 def patch_case(
     case_id: Annotated[int, Path(ge=1)], update: CaseUpdate,
+    request: Request,
     dsn: str = Depends(get_database_dsn),
 ) -> dict[str, Any]:
     try:
-        result = update_case(dsn, case_id, update.status.value, update.note, update.expected_version)
+        result = update_case(
+            dsn, case_id, update.status.value, update.note, update.expected_version,
+            actor=getattr(request.state, "actor", None),
+        )
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
     except CaseVersionConflict as exc:
         raise HTTPException(409, str(exc)) from exc
     if result is None:

@@ -2,6 +2,7 @@
 
 const $ = (id) => document.getElementById(id);
 let readOnly = true;
+let currentRole = null;
 const state = {runId: null, runs: [], runTotal: 0, offset: 0, limit: 10, total: 0, runsToken: 0, runToken: 0, caseToken: 0, detailToken: 0};
 const rules = {
   PAID_BUT_ORDER_UNPAID: ["訂單狀態未更新", ""],
@@ -10,6 +11,7 @@ const rules = {
   SETTLEMENT_ARITHMETIC_MISMATCH: ["結算算式不符", "arithmetic"],
 };
 const statuses = {OPEN: "待處理", IN_PROGRESS: "調查中", CLOSED: "已結案"};
+const roleLabels = {viewer: "檢視者", investigator: "調查人員", supervisor: "主管"};
 const labels = {
   order_id: "訂單編號", payment_id: "付款編號", settlement_id: "結算編號",
   amount: "金額", currency: "幣別", payment_status: "付款狀態", status: "付款結果",
@@ -48,6 +50,7 @@ async function api(path, options) {
   try { data = await response.json(); }
   catch { throw new Error(`服務未回傳有效結果（HTTP ${response.status}），請稍後再試。`); }
   if (!response.ok) {
+    if (response.status === 401) window.location.replace("/login");
     let detail = data.detail;
     if (Array.isArray(detail)) detail = detail.map((entry) => `${entry.loc?.slice(1).join(" / ") || "欄位"}：${entry.msg}`).join("；");
     const error = new Error(typeof detail === "string" ? detail : `操作失敗（HTTP ${response.status}）`);
@@ -224,12 +227,14 @@ function workflow(data, findingId = data.case_id) {
   section.append(heading);
   const form = node("form");
   const fields = node("fieldset");
-  fields.disabled = readOnly;
+  const canEdit = !readOnly && (currentRole !== "investigator" || data.status !== "CLOSED");
+  fields.disabled = !canEdit;
   const statusLabel = node("label", "field-label", "更新處理狀態");
   statusLabel.htmlFor = "case-status";
   const select = node("select");
   select.id = "case-status";
   for (const [value, label] of Object.entries(statuses)) {
+    if (value === "CLOSED" && currentRole === "investigator" && data.status !== "CLOSED") continue;
     const option = node("option", "", label);
     option.value = value;
     select.append(option);
@@ -255,7 +260,11 @@ function workflow(data, findingId = data.case_id) {
   reload.type = "button";
   reload.hidden = true;
   form.append(fields, feedback, reload);
-  section.append(form);
+  if (canEdit) {
+    section.append(form);
+  } else if (!readOnly) {
+    section.append(node("p", "input-help", "只有主管可以更新已結案的案件。"));
+  }
   section.append(node("p", "input-help", `版本 ${data.version} · 更新於 ${displayTime(data.updated_at)}${data.closed_at ? ` · 結案於 ${displayTime(data.closed_at)}` : ""}`));
 
   const history = node("details", "workflow-history");
@@ -264,7 +273,10 @@ function workflow(data, findingId = data.case_id) {
   if (!data.history.length) history.append(node("p", "muted small", "尚無處理備註。新增第一筆，開始追蹤進度。"));
   for (const event of data.history) {
     const entry = node("article", "history-entry");
-    entry.append(node("p", "history-meta", `${displayTime(event.created_at)} · ${event.from_status === event.to_status ? `${statuses[event.to_status]} · 新增備註` : `${statuses[event.from_status]} → ${statuses[event.to_status]}`}`), node("p", "history-note", event.note));
+    const actor = event.actor_username
+      ? `${event.actor_username}（${roleLabels[event.actor_role]}）`
+      : "未記錄操作者";
+    entry.append(node("p", "history-meta", `${displayTime(event.created_at)} · ${actor} · ${event.from_status === event.to_status ? `${statuses[event.to_status]} · 新增備註` : `${statuses[event.from_status]} → ${statuses[event.to_status]}`}`), node("p", "history-note", event.note));
     history.append(entry);
   }
   section.append(history);
@@ -291,7 +303,7 @@ function workflow(data, findingId = data.case_id) {
       feedback.textContent = error.message;
       feedback.hidden = false;
       reload.hidden = error.status !== 409;
-    } finally {fields.disabled = false; save.textContent = "儲存處理紀錄";}
+    } finally {fields.disabled = !canEdit; save.textContent = "儲存處理紀錄";}
   });
   reload.addEventListener("click", async () => {
     const draft = note.value;
@@ -302,9 +314,12 @@ function workflow(data, findingId = data.case_id) {
       const updated = await api(`/api/cases/${findingId}`);
       if (token !== state.detailToken || !$("case-dialog").open) return;
       renderDetail(updated);
-      $("case-note").value = draft;
-      $("case-status").value = desiredStatus;
-      message("workflow-message", "已載入最新版本並保留草稿。請核對最新處理紀錄後，再儲存。", true);
+      const refreshedNote = $("case-note");
+      if (refreshedNote) {
+        refreshedNote.value = draft;
+        $("case-status").value = desiredStatus;
+        message("workflow-message", "已載入最新版本並保留草稿。請核對最新處理紀錄後，再儲存。", true);
+      }
     } catch (error) {feedback.textContent = error.message; feedback.hidden = false;}
     finally {reload.disabled = false;}
   });
@@ -545,10 +560,16 @@ async function startWorkbench() {
   $("upload-fields").disabled = true;
   try {
     const config = await api("/api/deployment");
-    readOnly = config.read_only !== false;
+    currentRole = config.role ?? null;
+    readOnly = config.read_only !== false || currentRole === "viewer";
     $("upload-fields").disabled = readOnly;
+    if (currentRole) {
+      const identity = $("account-identity");
+      identity.textContent = `${config.username} · ${roleLabels[currentRole]}`;
+      $("account-session").hidden = false;
+    }
     if (readOnly) {
-      $("demo-notice").hidden = false;
+      $("demo-notice").hidden = !config.read_only;
       document.querySelector(".upload-panel").hidden = true;
       $("workbench-layout").classList.add("demo-layout");
     }
@@ -558,4 +579,7 @@ async function startWorkbench() {
     connection(false);
   }
 }
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) window.location.reload();
+});
 startWorkbench();

@@ -14,6 +14,10 @@
   </header>
   <main class="shell">
     <div class="page-heading"><div><p class="eyebrow">訂單 · 付款 · 結算</p><h1>讓每一筆差異，都有跡可循。</h1><p class="muted">匯入來源資料，找出異常，回到原始證據確認。</p></div><a class="text-link" href="/docs" target="_blank" rel="noopener">API 文件 ↗</a></div>
+    <form id="account-session" class="account-session" method="post" action="/logout" hidden>
+      <span id="account-identity"></span>
+      <button type="submit" class="button secondary">登出</button>
+    </form>
     <p id="demo-notice" class="message" role="status" hidden>公開作品展示 · 選擇前兩個時間較早的批次，開啟 O1003／P9003 查看三次查核與 S8003 結算證據。上傳與案件更新請使用本機版本。</p>
     <div class="layout" id="workbench-layout">
       <aside class="upload-panel panel">

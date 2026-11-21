@@ -8,6 +8,8 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.access import Actor
+
 from app.pipeline import RULES_VERSION, SCHEMAS, Snapshot, digest, json_digest
 from app.reconciliation import MISSING_SETTLEMENT_RULE, parse_money
 
@@ -189,7 +191,8 @@ def _case_detail(conn, case_id: int) -> dict | None:
         return None
     # 即使期間有其他更新，也只回傳讀取到的案件版本所涵蓋的紀錄。
     history = conn.execute(
-        "SELECT id AS event_id, from_status, to_status, note, version, created_at FROM case_events WHERE case_id=%s AND version<=%s ORDER BY version DESC",
+        """SELECT id AS event_id, from_status, to_status, note, version, created_at, actor_username, actor_role
+           FROM case_events WHERE case_id=%s AND version<=%s ORDER BY version DESC""",
         (case_id, row["version"]),
     ).fetchall()
     payload = row.pop("payload")
@@ -211,7 +214,8 @@ class CaseVersionConflict(Exception):
     """使用者看到的是舊版案件，避免覆蓋其他人的進度。"""
 
 
-def update_case(dsn: str, case_id: int, status: str, note: str, expected_version: int) -> dict | None:
+def update_case(dsn: str, case_id: int, status: str, note: str, expected_version: int,
+                *, actor: Actor | None = None) -> dict | None:
     note = note.strip()
     if status not in {"OPEN", "IN_PROGRESS", "CLOSED"} or not 1 <= len(note) <= 2000:
         raise ValueError("請選擇有效狀態，並填寫 1～2000 字的處理備註")
@@ -222,6 +226,11 @@ def update_case(dsn: str, case_id: int, status: str, note: str, expected_version
         current = conn.execute("SELECT status, version, closed_at FROM cases WHERE id=%s FOR UPDATE", (case_id,)).fetchone()
         if current is None:
             return None
+        if actor is not None:
+            if actor.role == "viewer":
+                raise PermissionError("檢視者無法更新案件。")
+            if actor.role != "supervisor" and (status == "CLOSED" or current["status"] == "CLOSED"):
+                raise PermissionError("只有主管可以結案或更新已結案的案件。")
         if current["version"] != expected_version:
             raise CaseVersionConflict("案件已被更新，請重新載入案件後再儲存；備註尚未送出")
         conn.execute(
@@ -230,7 +239,9 @@ def update_case(dsn: str, case_id: int, status: str, note: str, expected_version
                 WHERE id=%s""", (status, status, case_id),
         )
         conn.execute(
-            "INSERT INTO case_events (case_id, from_status, to_status, note, version) VALUES (%s,%s,%s,%s,%s)",
-            (case_id, current["status"], status, note, current["version"] + 1),
+            """INSERT INTO case_events (case_id, from_status, to_status, note, version, actor_username, actor_role)
+               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+            (case_id, current["status"], status, note, current["version"] + 1,
+             actor.username if actor else None, actor.role if actor else None),
         )
         return _case_detail(conn, case_id)

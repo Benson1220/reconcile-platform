@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登入 · 資料對帳工作台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="login-page panel">
+    <h1>登入資料對帳工作台</h1>
+    <!-- login-error -->
+    <form method="post" action="/login">
+      <label for="username">帳號</label>
+      <input id="username" name="username" autocomplete="username" maxlength="32" required autofocus>
+      <label for="password">密碼</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required>
+      <button class="button primary" type="submit">登入</button>
+    </form>
+  </main>
+</body>
+</html>

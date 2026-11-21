@@ -90,7 +90,7 @@ class DatabaseTests(unittest.TestCase):
     def test_migration_can_be_repeated(self):
         initialize_database(self.dsn)
         with psycopg.connect(self.dsn) as conn:
-            self.assertEqual(conn.execute("SELECT count(*) FROM schema_migrations").fetchone()[0], 4)
+            self.assertEqual(conn.execute("SELECT count(*) FROM schema_migrations").fetchone()[0], 6)
 
     def test_cloud_bootstrap_reuses_samples_and_prepares_read_only_summaries(self):
         from scripts.cloud_start import bootstrap

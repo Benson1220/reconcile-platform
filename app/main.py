@@ -5,11 +5,13 @@ from pathlib import Path
 import psycopg
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Depends, FastAPI, Form, HTTPException, Path as PathParam, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
+from app.access import SESSION_COOKIE, SESSION_SECONDS, authenticate, end_session, session_actor, start_session
 from app.api import get_database_dsn, router
 from app.database import get_case, get_run, source_hashes
 from app.report import render_report
@@ -17,26 +19,60 @@ from app.reconciliation import MISSING_SETTLEMENT_RULE
 from app.tracking import get_tracking
 
 logger = logging.getLogger(__name__)
+NO_CACHE = {"Cache-Control": "no-store"}
 
 
 def create_app() -> FastAPI:
     instance = FastAPI(title="跨系統資料差異追查平台", version="0.2.0")
     read_only = os.environ.get("DEMO_READ_ONLY", "false").lower() == "true"
+    auth_required = not read_only and os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
 
     @instance.middleware("http")
-    async def demo_access(request: Request, call_next):
-        if read_only and request.method not in {"GET", "HEAD", "OPTIONS"}:
+    async def enforce_access(request: Request, call_next):
+        writes = request.method not in {"GET", "HEAD", "OPTIONS"}
+        if read_only and writes:
             return JSONResponse(status_code=403, content={"detail": "公開展示版僅供查詢；上傳與案件更新請使用本機版本。"})
-        return await call_next(request)
+        path = request.url.path
+        if not auth_required or path in {"/health", "/ready"} or (
+            path.startswith("/static/") and path.endswith((".css", ".js"))
+        ):
+            return await call_next(request)
+        if writes:
+            origin = request.headers.get("origin")
+            same_origin = f"{request.url.scheme}://{request.url.netloc}"
+            if (origin is not None and origin != same_origin) or request.headers.get("sec-fetch-site") == "cross-site":
+                return JSONResponse(status_code=403, content={"detail": "目前權限無法執行此操作。"})
+        if path in {"/login", "/logout"}:
+            response = await call_next(request)
+            response.headers.update(NO_CACHE)
+            return response
+        try:
+            dsn = instance.dependency_overrides.get(get_database_dsn, get_database_dsn)()
+            actor = await run_in_threadpool(session_actor, dsn, request.cookies.get(SESSION_COOKIE, ""))
+        except (psycopg.Error, HTTPException):
+            return JSONResponse(status_code=503, content={"detail": "帳號服務暫時無法使用，請確認資料庫已初始化。"})
+        if actor is None:
+            if request.method == "GET" and not path.startswith("/api/"):
+                return RedirectResponse("/login", status_code=303, headers=NO_CACHE)
+            return JSONResponse(status_code=401, headers=NO_CACHE, content={"detail": "請登入工作台。"})
+        if writes and actor.role == "viewer":
+            return JSONResponse(status_code=403, content={"detail": "目前權限無法執行此操作。"})
+        request.state.actor = actor
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @instance.get("/api/deployment", tags=["健康檢查"])
-    def deployment():
+    def deployment(request: Request):
+        if auth_required:
+            actor = request.state.actor
+            return {"read_only": False, "username": actor.username, "role": actor.role}
         return {"read_only": read_only}
 
     @instance.get("/ready", tags=["健康檢查"])
     def ready():
         with psycopg.connect(get_database_dsn(), connect_timeout=5) as conn:
-            row = conn.execute("SELECT 1 FROM schema_migrations WHERE version=4").fetchone()
+            row = conn.execute("SELECT 1 FROM schema_migrations WHERE version=6").fetchone()
         if row is None:
             return JSONResponse(status_code=503, content={"detail": "資料庫尚未完成初始化"})
         return {"status": "ready"}
@@ -44,6 +80,38 @@ def create_app() -> FastAPI:
     instance.include_router(router)
     web = Path(__file__).resolve().parent / "web"
     instance.mount("/static", StaticFiles(directory=web), name="static")
+
+    if auth_required:
+        login_html = (web / "login.html").read_text(encoding="utf-8")
+
+        @instance.get("/login", include_in_schema=False)
+        def login_page():
+            return HTMLResponse(login_html)
+
+        @instance.post("/login", include_in_schema=False)
+        def login(request: Request, username: Annotated[str, Form()], password: Annotated[str, Form()],
+                  dsn: str = Depends(get_database_dsn)):
+            actor = authenticate(dsn, username, password)
+            if actor is None:
+                return HTMLResponse(login_html.replace(
+                    "<!-- login-error -->", '<p class="message" role="alert">帳號或密碼不正確。</p>',
+                ), status_code=401)
+            token = start_session(dsn, actor.username, request.cookies.get(SESSION_COOKIE, ""))
+            response = RedirectResponse("/", status_code=303)
+            response.set_cookie(
+                SESSION_COOKIE, token, max_age=SESSION_SECONDS, httponly=True,
+                samesite="strict", secure=request.url.scheme == "https",
+            )
+            return response
+
+        @instance.post("/logout", include_in_schema=False)
+        def logout(request: Request, dsn: str = Depends(get_database_dsn)):
+            end_session(dsn, request.cookies.get(SESSION_COOKIE, ""))
+            response = RedirectResponse("/login", status_code=303)
+            response.delete_cookie(
+                SESSION_COOKIE, httponly=True, samesite="strict", secure=request.url.scheme == "https",
+            )
+            return response
 
     @instance.get("/", include_in_schema=False)
     def home():

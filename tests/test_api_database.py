@@ -1,6 +1,7 @@
 import os
 import unittest
 import uuid
+from unittest.mock import patch
 
 import psycopg
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
 from app.api import get_database_dsn
+from app.access import SESSION_COOKIE, create_user
 from app.database import database_url, initialize_database, read_summary, save_snapshot
 from app.main import create_app
 from app.pipeline import SAMPLE_DIR
@@ -34,6 +36,81 @@ class ApiDatabaseTests(unittest.TestCase):
     def cleanup_schema(self):
         with psycopg.connect(self.base_dsn) as conn:
             conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(self.schema)))
+
+    def test_roles_enforce_case_changes_and_record_authenticated_actors(self):
+        run = save_snapshot(demo_snapshot("first"), self.dsn)
+        cases = self.client.get(f"/api/runs/{run['run_id']}/cases").json()["items"]
+        case_id = next(case["case_id"] for case in cases if case["order_id"] == "O1004")
+        url = f"/api/cases/{case_id}"
+        report = f"/cases/{case_id}/report"
+        password = "synthetic-password-for-test"
+        for username, role in [("alice", "viewer"), ("bob", "investigator"), ("carol", "supervisor")]:
+            create_user(self.dsn, username, role, password)
+        with patch.dict(os.environ, {"DEMO_READ_ONLY": "false", "AUTH_REQUIRED": "true"}):
+            app = create_app()
+            app.dependency_overrides[get_database_dsn] = lambda: self.dsn
+            with TestClient(app) as client:
+                self.assertEqual(client.get(url).status_code, 401)
+                self.assertEqual(client.post("/login", data={"username": "alice", "password": "wrong"}).status_code, 401)
+                active = None
+
+                def sign_in(username):
+                    nonlocal active
+                    if username != active:
+                        response = client.post("/login", data={"username": username, "password": password}, follow_redirects=False)
+                        self.assertEqual(response.status_code, 303)
+                        active = username
+
+                sign_in("alice")
+                self.assertEqual(client.get(report).status_code, 200)
+
+                def update(username, status, version, headers=None):
+                    sign_in(username)
+                    return client.patch(url, headers=headers, json={
+                        "status": status, "note": "測試查核", "expected_version": version,
+                        "actor_username": "spoofed",
+                    })
+
+                self.assertEqual(update("alice", "IN_PROGRESS", 1).status_code, 403)
+                self.assertEqual(update("bob", "CLOSED", 1).status_code, 403)
+                self.assertEqual(update("bob", "IN_PROGRESS", 1, {"Origin": "https://other.example"}).status_code, 403)
+                started = update("bob", "IN_PROGRESS", 1)
+                self.assertEqual(started.status_code, 200)
+                self.assertEqual(started.json()["history"][0]["actor_username"], "bob")
+                self.assertEqual(update("carol", "CLOSED", 1).status_code, 409)
+                self.assertEqual(update("carol", "CLOSED", 2).status_code, 200)
+                self.assertEqual(update("bob", "IN_PROGRESS", 3).status_code, 403)
+                sign_in("alice")
+                finished = client.get(url).json()
+                self.assertEqual(finished["status"], "CLOSED")
+                self.assertEqual(
+                    [(event["actor_username"], event["actor_role"]) for event in finished["history"]],
+                    [("carol", "supervisor"), ("bob", "investigator")],
+                )
+                self.assertIn("carol", client.get(report).text)
+                self.assertEqual(update("carol", "IN_PROGRESS", 3).status_code, 200)
+
+    def test_logout_revokes_session_and_allows_switching_accounts(self):
+        password = "synthetic-password-for-test"
+        create_user(self.dsn, "alice", "viewer", password)
+        create_user(self.dsn, "bob", "investigator", password)
+        with patch.dict(os.environ, {"DEMO_READ_ONLY": "false", "AUTH_REQUIRED": "true"}):
+            app = create_app()
+            app.dependency_overrides[get_database_dsn] = lambda: self.dsn
+            with TestClient(app) as client:
+                self.assertEqual(client.get("/", follow_redirects=False).headers["location"], "/login")
+                signed_in = client.post("/login", data={"username": "alice", "password": password})
+                self.assertIn("登出", signed_in.text)
+                token = client.cookies[SESSION_COOKIE]
+                self.assertEqual(client.get("/api/deployment").json()["username"], "alice")
+                self.assertEqual(client.post("/logout", headers={"Origin": "https://other.example"}).status_code, 403)
+                signed_out = client.post("/logout", follow_redirects=False)
+                self.assertEqual(signed_out.headers["location"], "/login")
+                self.assertNotIn(SESSION_COOKIE, client.cookies)
+                self.assertEqual(client.get("/api/deployment", headers={"Cookie": f"{SESSION_COOKIE}={token}"}).status_code, 401)
+                self.assertEqual(client.get("/", follow_redirects=False).headers["location"], "/login")
+                client.post("/login", data={"username": "bob", "password": password})
+                self.assertEqual(client.get("/api/deployment").json()["username"], "bob")
 
     def test_missing_settlement_tracks_shared_workflow_and_requires_human_review(self):
         def missing_case(stage):

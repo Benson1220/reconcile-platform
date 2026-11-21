@@ -12,7 +12,7 @@ from scripts.cloud_start import main
 
 class DeploymentTests(unittest.TestCase):
     def test_demo_blocks_writes_before_database_or_model_access(self):
-        with patch.dict(os.environ, {"DEMO_READ_ONLY": "true"}), TestClient(create_app()) as client:
+        with patch.dict(os.environ, {"DEMO_READ_ONLY": "true", "AUTH_REQUIRED": "true"}), TestClient(create_app()) as client:
             for method, path in [
                 ("post", "/api/reconciliations"), ("patch", "/api/cases/1"),
                 ("post", "/api/cases/1/rule-summary"), ("post", "/api/cases/1/ai-summary"),
@@ -22,6 +22,8 @@ class DeploymentTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 403)
                     connect.assert_not_called()
             self.assertEqual(client.get("/api/deployment").json(), {"read_only": True})
+            self.assertEqual(client.get("/login").status_code, 404)
+            self.assertEqual(client.post("/logout").status_code, 403)
             for path in ["/", "/static/app.js", "/docs", "/health"]:
                 self.assertEqual(client.get(path).status_code, 200)
 

@@ -53,7 +53,7 @@ def render_report(case: dict, run: dict, hashes: dict[str, str]) -> str:
         )
 
     history = "".join(
-        f"<li>{safe(timestamp(event['created_at']))} · "
+        f"<li>{safe(timestamp(event['created_at']))} · {safe(event.get('actor_username') or '未記錄操作者')} · "
         f"{safe(STATUSES[event['from_status']])} → {safe(STATUSES[event['to_status']])}"
         f"<div class='note'>{safe(event['note'])}</div></li>"
         for event in case["history"]
