@@ -73,9 +73,9 @@ erDiagram
 
 ## 測試證據
 
-目前 115 項測試，86 項不需 PostgreSQL，29 項需本機 PostgreSQL。
+目前共 123 項測試，其中 92 項不需資料庫，31 項使用 PostgreSQL。
 完整指令：`RUN_DATABASE_TESTS=1 python -m unittest discover -s tests -v`。
-2026-11-17 的完整執行結果為 `Ran 115 tests`、`OK`，使用者亦已在自己的終端機確認。
+GitHub Actions 在推送程式碼或更新 pull request 時會建立獨立的 PostgreSQL 17 測試服務，並執行完整測試。可在 [Actions 頁面](https://github.com/Benson1220/reconcile-platform/actions) 查看每次執行的結果。
 
 具體覆蓋：
 

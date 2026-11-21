@@ -1,0 +1,42 @@
+name: Tests
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python tests with PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: reconcile_test
+          POSTGRES_PASSWORD: reconcile_test
+          POSTGRES_DB: reconcile_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reconcile_test -d reconcile_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements-lock.txt
+      - name: Run full test suite
+        env:
+          DATABASE_URL: postgresql://reconcile_test:reconcile_test@127.0.0.1:5432/reconcile_test
+          RUN_DATABASE_TESTS: "1"
+        run: python -m unittest discover -s tests -v
